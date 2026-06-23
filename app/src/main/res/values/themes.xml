@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <!-- Base theme. Compose handles the actual visual styling, this just sets up
+         the window background and the splash background before Compose mounts. -->
+    <style name="Theme.ShadPS4" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@color/md_background</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowLayoutInDisplayCutoutMode" tools:targetApi="o_mr1">shortEdges</item>
+        <item name="android:windowLightStatusBar" tools:targetApi="m">true</item>
+        <item name="android:enforceNavigationBarContrast" tools:targetApi="q">false</item>
+        <item name="android:enforceStatusBarContrast" tools:targetApi="q">false</item>
+    </style>
+
+    <style name="Theme.ShadPS4.Splash" parent="Theme.ShadPS4">
+        <item name="android:windowBackground">@color/md_background</item>
+    </style>
+</resources>

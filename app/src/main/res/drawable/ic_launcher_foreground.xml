@@ -1,0 +1,25 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- PS4 stylized logo: a "PS" mark over a horizontal bar, in white over the purple background -->
+    <group
+        android:scaleX="0.6"
+        android:scaleY="0.6"
+        android:translateX="21.6"
+        android:translateY="21.6">
+        <path
+            android:fillColor="#FFFFFF"
+            android:pathData="M30,28 L30,68 L40,68 L40,55 L48,55 C58,55 65,49 65,41 C65,33 58,28 48,28 Z M40,37 L48,37 C52,37 55,39 55,41 C55,44 52,46 48,46 L40,46 Z" />
+        <path
+            android:fillColor="#FFFFFF"
+            android:pathData="M70,72 L70,82 L96,82 L96,72 Z" />
+        <path
+            android:fillColor="#FFFFFF"
+            android:pathData="M70,28 L70,38 L96,38 L96,28 Z" />
+        <path
+            android:fillColor="#FFFFFF"
+            android:pathData="M70,50 L70,60 L96,60 L96,50 Z" />
+    </group>
+</vector>

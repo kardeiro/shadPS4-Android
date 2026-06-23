@@ -1,0 +1,148 @@
+package com.shadps4.emulator.data.model
+
+/**
+ * Sample game data shown in the prototype UI so the user can see how the
+ * library, game detail and compatibility list will look once the emulator core
+ * is wired up. These are well-known PS4 titles; their presence here does NOT
+ * imply the emulator can run them.
+ */
+object SampleGames {
+
+    val all: List<GameInfo> = listOf(
+        GameInfo(
+            id = "bloodborne",
+            title = "Bloodborne",
+            serial = "CUSA00207",
+            version = "1.09",
+            category = "Game",
+            firmware = "5.05",
+            sizeBytes = 32_500_000_000L,
+            installDateMs = 1_699_000_000_000L,
+            lastPlayedMs = 1_718_000_000_000L,
+            playtimeMs = 3_600_000L * 64,
+            compatibility = CompatibilityStatus.INGAME,
+        ),
+        GameInfo(
+            id = "diva-ft",
+            title = "Hatsune Miku: Project DIVA Future Tone",
+            serial = "CUSA05830",
+            version = "1.06",
+            category = "Game",
+            firmware = "5.05",
+            sizeBytes = 12_300_000_000L,
+            installDateMs = 1_701_000_000_000L,
+            lastPlayedMs = 1_715_000_000_000L,
+            playtimeMs = 3_600_000L * 12,
+            compatibility = CompatibilityStatus.PLAYABLE,
+        ),
+        GameInfo(
+            id = "god-of-war",
+            title = "God of War",
+            serial = "CUSA07410",
+            version = "1.35",
+            category = "Game",
+            firmware = "6.20",
+            sizeBytes = 44_000_000_000L,
+            installDateMs = 1_695_000_000_000L,
+            lastPlayedMs = 1_712_000_000_000L,
+            playtimeMs = 3_600_000L * 8,
+            compatibility = CompatibilityStatus.MENU,
+        ),
+        GameInfo(
+            id = "horizon-zd",
+            title = "Horizon Zero Dawn",
+            serial = "CUSA04067",
+            version = "1.60",
+            category = "Game",
+            firmware = "7.55",
+            sizeBytes = 49_000_000_000L,
+            installDateMs = 1_700_000_000_000L,
+            lastPlayedMs = 0L,
+            playtimeMs = 0L,
+            compatibility = CompatibilityStatus.INTRO,
+        ),
+        GameInfo(
+            id = "spider-man",
+            title = "Marvel's Spider-Man",
+            serial = "CUSA11993",
+            version = "1.29",
+            category = "Game",
+            firmware = "8.00",
+            sizeBytes = 55_000_000_000L,
+            installDateMs = 1_702_000_000_000L,
+            lastPlayedMs = 1_705_000_000_000L,
+            playtimeMs = 3_600_000L * 2,
+            compatibility = CompatibilityStatus.NOTHING,
+        ),
+        GameInfo(
+            id = "tlou-2",
+            title = "The Last of Us Part II",
+            serial = "CUSA16680",
+            version = "1.11",
+            category = "Game",
+            firmware = "9.00",
+            sizeBytes = 78_000_000_000L,
+            installDateMs = 1_704_000_000_000L,
+            lastPlayedMs = 0L,
+            playtimeMs = 0L,
+            compatibility = CompatibilityStatus.NOTHING,
+        ),
+        GameInfo(
+            id = "persona5",
+            title = "Persona 5 Royal",
+            serial = "CUSA17416",
+            version = "1.02",
+            category = "Game",
+            firmware = "7.50",
+            sizeBytes = 38_000_000_000L,
+            installDateMs = 1_706_000_000_000L,
+            lastPlayedMs = 1_720_000_000_000L,
+            playtimeMs = 3_600_000L * 23,
+            compatibility = CompatibilityStatus.MENU,
+        ),
+        GameInfo(
+            id = "ff7-remake",
+            title = "Final Fantasy VII Remake",
+            serial = "CUSA16716",
+            version = "1.02",
+            category = "Game",
+            firmware = "7.50",
+            sizeBytes = 86_000_000_000L,
+            installDateMs = 1_707_000_000_000L,
+            lastPlayedMs = 0L,
+            playtimeMs = 0L,
+            compatibility = CompatibilityStatus.INTRO,
+        ),
+        GameInfo(
+            id = "ratchet-clank",
+            title = "Ratchet & Clank",
+            serial = "CUSA00414",
+            version = "1.16",
+            category = "Game",
+            firmware = "5.05",
+            sizeBytes = 33_500_000_000L,
+            installDateMs = 1_694_000_000_000L,
+            lastPlayedMs = 1_710_000_000_000L,
+            playtimeMs = 3_600_000L * 5,
+            compatibility = CompatibilityStatus.INGAME,
+        ),
+        GameInfo(
+            id = "until-dawn",
+            title = "Until Dawn",
+            serial = "CUSA01827",
+            version = "1.10",
+            category = "Game",
+            firmware = "5.05",
+            sizeBytes = 36_000_000_000L,
+            installDateMs = 1_693_000_000_000L,
+            lastPlayedMs = 0L,
+            playtimeMs = 0L,
+            compatibility = CompatibilityStatus.NOTHING,
+        ),
+    )
+
+    val recent: List<GameInfo>
+        get() = all.filter { it.lastPlayedMs > 0L }
+            .sortedByDescending { it.lastPlayedMs }
+            .take(4)
+}

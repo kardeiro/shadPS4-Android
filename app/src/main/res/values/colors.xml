@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Brand colors (used as seed for fallback when dynamic color is unavailable) -->
+    <color name="seed">#6750A4</color>
+
+    <!-- Surface palette for non-dynamic devices -->
+    <color name="md_primary">#6750A4</color>
+    <color name="md_on_primary">#FFFFFF</color>
+    <color name="md_primary_container">#EADDFF</color>
+    <color name="md_on_primary_container">#21005D</color>
+
+    <color name="md_secondary">#625B71</color>
+    <color name="md_on_secondary">#FFFFFF</color>
+    <color name="md_secondary_container">#E8DEF8</color>
+    <color name="md_on_secondary_container">#1D192B</color>
+
+    <color name="md_tertiary">#7D5260</color>
+    <color name="md_on_tertiary">#FFFFFF</color>
+    <color name="md_tertiary_container">#FFD8E4</color>
+    <color name="md_on_tertiary_container">#31111D</color>
+
+    <color name="md_error">#B3261E</color>
+    <color name="md_on_error">#FFFFFF</color>
+    <color name="md_error_container">#F9DEDC</color>
+    <color name="md_on_error_container">#410E0B</color>
+
+    <color name="md_background">#FFFBFE</color>
+    <color name="md_on_background">#1C1B1F</color>
+    <color name="md_surface">#FFFBFE</color>
+    <color name="md_on_surface">#1C1B1F</color>
+    <color name="md_surface_variant">#E7E0EC</color>
+    <color name="md_on_surface_variant">#49454F</color>
+    <color name="md_outline">#79747E</color>
+    <color name="md_outline_variant">#CAC4D0</color>
+
+    <!-- Compatibility status colors -->
+    <color name="compat_playable">#1B873F</color>
+    <color name="compat_ingame">#2E7D32</color>
+    <color name="compat_menu">#F9A825</color>
+    <color name="compat_intro">#EF6C00</color>
+    <color name="compat_nothing">#C62828</color>
+
+    <!-- Brand accent (PS4 blue / shadPS4 purple) -->
+    <color name="brand_purple">#8A2BE2</color>
+    <color name="brand_blue">#003791</color>
+</resources>
