@@ -22,8 +22,22 @@ android {
         }
 
         ndk {
-            // NDK ABI config (placeholder for future native core integration)
+            // Phase 1: ship ARM64 only. x86_64 emulators are supported too
+            // for testing on the Android emulator; will add `x86_64` once we
+            // need to test Vulkan there.
             abiFilters += listOf("arm64-v8a")
+        }
+
+        externalNativeBuild {
+            cmake {
+                // Targets the CMakeLists.txt under app/src/main/cpp/.
+                arguments += listOf(
+                    "-DANDROID_STL=c++_shared",
+                    "-DANDROID_PLATFORM=android-26",
+                )
+                // C++23 needs NDK r25+; the workflow pins NDK 27.2.
+                cppFlags += listOf("-std=c++23", "-fexceptions", "-frtti")
+            }
         }
     }
 
@@ -56,6 +70,18 @@ android {
         compose = true
         buildConfig = true
     }
+
+    // Points AGP at our cpp/CMakeLists.txt so it builds libshadps4_native.so
+    // and packages it into the APK for the ABI filters declared above.
+    externalNativeBuild {
+        cmake {
+            path = file("src/main/cpp/CMakeLists.txt")
+            version = "3.22.1"
+        }
+    }
+
+    // Pin NDK version so local + CI builds use the same toolchain.
+    ndkVersion = "27.2.12479018"
 
     packaging {
         resources {

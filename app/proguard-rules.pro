@@ -21,3 +21,17 @@
 
 # Coil
 -dontwarn coil.**
+
+# ─── JNI bridge ────────────────────────────────────────────────────────────
+# Keep the native method declarations so R8 doesn't rename them and break
+# the C++ `Java_com_shadps4_emulator_data_native_ShadPs4Native_*` linkage.
+-keep class com.shadps4.emulator.data.native.ShadPs4Native {
+    public static native <methods>;
+}
+
+# Keep the ParamSfo data class + constructor signature that JNI looks up by
+# `(Ljava/lang/String;...)V` — R8 must not rename fields or reorder ctor args.
+-keep class com.shadps4.emulator.data.model.ParamSfo {
+    public <init>(...);
+    <fields>;
+}
