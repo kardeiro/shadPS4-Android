@@ -13,6 +13,8 @@
 #include <android/log.h>
 
 #include <cstdio>
+#include <cstring>
+#include <fstream>
 #include <filesystem>
 #include <memory>
 #include <optional>
@@ -261,23 +263,39 @@ Java_com_shadps4_emulator_data_native_ShadPs4Native_nativeInstallPkg(
 
     // Detect common non-PKG files by their magic bytes — give the user a
     // friendly error message instead of a generic "bad magic".
-    auto starts_with = [&](const u8* sig, std::size_t n) -> bool {
+    //
+    // Note: hex escape sequences in C++ string literals are greedy — they
+    // consume as many hex digits as possible. So "\x7FELF" parses as
+    // "\x7FE" + "LF" (wrong!) because 'E' is a valid hex digit. We avoid
+    // this by using raw byte arrays instead of string literals.
+    auto matches = [&](const u8* sig, std::size_t n) -> bool {
         return std::memcmp(first_bytes, sig, n) == 0;
     };
-    if (starts_with(reinterpret_cast<const u8*>("PK\x03\x04"), 4)) {
+    static constexpr u8 ZIP_MAGIC[4]  = {0x50, 0x4B, 0x03, 0x04};        // "PK\x03\x04"
+    static constexpr u8 RAR_MAGIC[4]  = {0x52, 0x61, 0x72, 0x21};        // "Rar!"
+    static constexpr u8 SEVENZ_MAGIC[6] = {0x37, 0x7A, 0xBC, 0xAF, 0x27, 0x1C}; // "7z\xBC\xAF\x27\x1C"
+    static constexpr u8 ELF_MAGIC[4]  = {0x7F, 0x45, 0x4C, 0x46};        // "\x7FELF"
+    static constexpr u8 MSCF_MAGIC[4] = {0x4D, 0x53, 0x43, 0x46};        // "MSCF"
+    static constexpr u8 GZIP_MAGIC[2] = {0x1F, 0x8B};                    // gzip
+    static constexpr u8 RAR5_MAGIC[7] = {0x52, 0x61, 0x72, 0x21, 0x1A, 0x07, 0x01}; // "Rar!\x1A\x07\x01"
+
+    if (matches(ZIP_MAGIC, 4)) {
         return make_error("Selected file is a ZIP archive, not a PKG. Unzip it first or pick the .pkg file directly.");
     }
-    if (starts_with(reinterpret_cast<const u8*>("Rar!"), 4)) {
+    if (matches(RAR_MAGIC, 4) || matches(RAR5_MAGIC, 7)) {
         return make_error("Selected file is a RAR archive, not a PKG. Extract it first.");
     }
-    if (starts_with(reinterpret_cast<const u8*>("7z\xBC\xAF\x27\x1C"), 6)) {
+    if (matches(SEVENZ_MAGIC, 6)) {
         return make_error("Selected file is a 7-Zip archive, not a PKG. Extract it first.");
     }
-    if (starts_with(reinterpret_cast<const u8*>("\x7FELF"), 4)) {
+    if (matches(ELF_MAGIC, 4)) {
         return make_error("Selected file is an ELF executable (likely eboot.bin), not a PKG.");
     }
-    if (starts_with(reinterpret_cast<const u8*>("MSCF"), 4)) {
+    if (matches(MSCF_MAGIC, 4)) {
         return make_error("Selected file is a Microsoft Cabinet archive, not a PKG.");
+    }
+    if (matches(GZIP_MAGIC, 2)) {
+        return make_error("Selected file is a gzip/tar.gz archive, not a PKG. Extract it first.");
     }
 
     // ── Step 2: parse the PKG header + entry table ──────────────────────
