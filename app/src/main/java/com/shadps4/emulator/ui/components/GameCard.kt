@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -156,7 +157,7 @@ fun GameCard(
                         .padding(8.dp),
                 ) {
                     Icon(
-                        imageVector = androidx.compose.material.icons.Icons.Rounded.Check,
+                        imageVector = Icons.Rounded.Check,
                         contentDescription = "Installed",
                         tint = MaterialTheme.colorScheme.onPrimary,
                         modifier = Modifier
