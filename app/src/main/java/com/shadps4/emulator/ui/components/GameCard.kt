@@ -63,8 +63,9 @@ fun GameCard(
                     model = game.coverPath,
                     contentDescription = game.title,
                     modifier = Modifier.fillMaxSize(),
-                    errorPainter = painterResource(R.drawable.ic_game_placeholder),
                     placeholder = painterResource(R.drawable.ic_game_placeholder),
+                    error = painterResource(R.drawable.ic_game_placeholder),
+                    fallback = painterResource(R.drawable.ic_game_placeholder),
                 )
             } else {
                 Box(
