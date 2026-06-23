@@ -58,9 +58,11 @@ FetchContent_Populate(cryptopp_cmake)
 
 # Copy the CMakeLists.txt and supporting .cmake files from cryptopp-cmake
 # into the cryptopp source tree so add_subdirectory works.
+# (file(COPY ...) doesn't have an OPTIONAL argument — guard with EXISTS.)
 file(COPY ${cryptopp_cmake_SOURCE_DIR}/CMakeLists.txt DESTINATION ${cryptopp_src_SOURCE_DIR})
-file(COPY ${cryptopp_cmake_SOURCE_DIR}/cryptopp-config.cmake DESTINATION ${cryptopp_src_SOURCE_DIR})
-file(COPY ${cryptopp_cmake_SOURCE_DIR}/TestFindPackage.cmake DESTINATION ${cryptopp_src_SOURCE_DIR} OPTIONAL)
+if(EXISTS "${cryptopp_cmake_SOURCE_DIR}/cryptopp-config.cmake")
+    file(COPY ${cryptopp_cmake_SOURCE_DIR}/cryptopp-config.cmake DESTINATION ${cryptopp_src_SOURCE_DIR})
+endif()
 
 # Crypto++ CMake options: disable tests/examples, build static, no ASM
 # (ASM on Android ARM64 needs setup we don't want to deal with yet).
