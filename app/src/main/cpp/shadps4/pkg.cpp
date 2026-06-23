@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Copyright 2025 shadPS4 Android Project
+// SPDX-FileCopyrightText: Copyright 2024 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include "pkg.h"
@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cstring>
 #include <fstream>
+#include <sstream>
 #include <system_error>
 
 namespace Pkg {
@@ -30,11 +31,6 @@ bool ReadAt(std::ifstream& stream, u64 offset, void* dst, std::size_t n) {
     return static_cast<std::size_t>(stream.gcount()) == n;
 }
 
-// Convert a (lo, hi) pair to a u64. Used for the 32+32-bit size field at 0x14/0x18.
-inline u64 CombineU64(u32 lo, u32 hi) {
-    return (static_cast<u64>(hi) << 32) | lo;
-}
-
 }  // namespace
 
 std::optional<PkgFile> Open(const std::filesystem::path& filepath) {
@@ -48,52 +44,50 @@ std::optional<PkgFile> Open(const std::filesystem::path& filepath) {
         return std::nullopt;
     }
 
-    // Read just the documented header (0x80 bytes).
-    PkgHeader header{};
-    if (!ReadAt(f, 0, &header, sizeof(header))) {
-        return std::nullopt;
-    }
-
-    // Validate magic. PS3/PSVita/PS4 all share the magic 0x7F504B47
-    // ("\x7FPKG"), so a mismatch almost certainly means the file is not a
-    // PKG at all (zip, exe, raw bytes, etc.).
-    if (header.magic != PKG_MAGIC) {
-        // Diagnostic: log the first 16 bytes so the user can identify what
-        // they actually picked. This is invaluable when triaging "why won't
-        // my PKG install" reports.
-        u8 first_bytes[16]{};
-        f.clear();
-        f.seekg(0, std::ios::beg);
-        f.read(reinterpret_cast<char*>(first_bytes), sizeof(first_bytes));
-        return std::nullopt;
-    }
-
-    // The header_size field at 0x10 is documented to always be 0x1000. Some
-    // malformed PKGs may have it off, but we trust the field for the body
-    // offset fallback.
-    if (header.header_size != 0x1000 && header.header_size != 0) {
-        // Allow 0 (some tools leave it zeroed) but warn — we proceed anyway.
-    }
-
+    // Read the full 0x1000-byte header.
     PkgFile pkg{};
-    pkg.total_size = CombineU64(header.pkg_size_lo, header.pkg_size_hi);
-    pkg.body_offset = static_cast<u64>(header.body_offset);
-    pkg.body_size = static_cast<u64>(header.body_size);
-    pkg.entry_count = header.entry_count;
-    pkg.pkg_type_flags = header.pkg_type;
-    pkg.is_drm_free = (header.pkg_type & PKG_DRM_TYPE_FREE) != 0;
-
-    // Sanity check: entry table offset + count * 32 must fit inside the body.
-    // The entry table itself is plaintext (not part of the encrypted body)
-    // and is located at `entry_table_offset` from the start of the file.
-    if (pkg.entry_count == 0 || pkg.entry_count > 4096) {
-        // 4096 is an arbitrary sanity upper bound — real PKGs have ~10-50 entries.
+    if (!ReadAt(f, 0, &pkg.header, sizeof(PkgHeader))) {
         return std::nullopt;
     }
-    const u64 table_offset = static_cast<u64>(header.entry_table_offset);
-    const u64 table_size = static_cast<u64>(pkg.entry_count) * sizeof(PkgEntry);
 
-    pkg.entries.resize(pkg.entry_count);
+    // Validate magic. PS4 PKG magic = 0x7F434E54 ("\x7FCNT").
+    // PS3 PKGs use the same magic but a different body layout, so a mismatch
+    // here means either (a) not a PKG at all, or (b) a PS3 PKG.
+    if (pkg.header.magic != PKG_MAGIC) {
+        return std::nullopt;
+    }
+
+    pkg.file_size = std::filesystem::file_size(filepath, ec);
+    pkg.content_flags = pkg.header.pkg_content_flags;
+    pkg.is_drm_free = IsDrmFree(pkg.header.pkg_type);
+
+    // Extract the 36-byte content_id at offset 0x40.
+    {
+        char cid[sizeof(pkg.header.pkg_content_id) + 1] = {};
+        std::memcpy(cid, pkg.header.pkg_content_id, sizeof(pkg.header.pkg_content_id));
+        pkg.content_id = std::string(cid);
+    }
+
+    // The TITLE_ID is 9 chars starting at offset 7 of content_id (so PKG
+    // offset 0x47). Format: "CUSA00207" etc.
+    if (pkg.content_id.size() >= 16) {
+        pkg.title_id = pkg.content_id.substr(7, 9);
+    }
+
+    // Read the entry table.
+    const u32 entry_count = pkg.header.pkg_table_entry_count;
+    if (entry_count == 0 || entry_count > 4096) {
+        // 4096 is an arbitrary sanity upper bound.
+        return std::nullopt;
+    }
+
+    const u64 table_offset = static_cast<u64>(pkg.header.pkg_table_entry_offset);
+    const u64 table_size = static_cast<u64>(entry_count) * sizeof(PkgEntry);
+    if (table_offset + table_size > pkg.file_size) {
+        return std::nullopt;
+    }
+
+    pkg.entries.resize(entry_count);
     if (!ReadAt(f, table_offset, pkg.entries.data(), table_size)) {
         return std::nullopt;
     }
@@ -106,8 +100,9 @@ std::optional<std::vector<u8>> ReadEntry(
     const PkgFile& pkg,
     const PkgEntry& entry) {
 
-    // Refuse to read encrypted entries in MVP.
-    if ((entry.entry_flags & PKG_ENTRY_FLAG_ENCRYPTED) != 0) {
+    // Refuse to read encrypted entries in MVP — they need the full crypto
+    // pipeline (RSA + AES-XTS) which we don't have yet.
+    if ((entry.flags1 & PKG_ENTRY_FLAG_ENCRYPTED) != 0) {
         return std::nullopt;
     }
 
@@ -116,13 +111,13 @@ std::optional<std::vector<u8>> ReadEntry(
         return std::nullopt;
     }
 
-    // The entry_offset is relative to the body_offset, not absolute.
-    const u64 absolute_offset = pkg.body_offset + static_cast<u64>(entry.entry_offset);
-    const u64 size = static_cast<u64>(entry.entry_size);
+    // The entry.offset is ABSOLUTE (from the start of the PKG file), unlike
+    // what some older documentation says. This matches the shadPS4Plus
+    // implementation: `file.Seek(entry.offset)` after reading the table.
+    const u64 absolute_offset = static_cast<u64>(entry.offset);
+    const u64 size = static_cast<u64>(entry.size);
 
-    // Sanity: the entry must fit inside the body region.
-    if (absolute_offset + size > pkg.body_offset + pkg.body_size + 0x1000) {
-        // Allow a small slack for padding; reject obviously broken entries.
+    if (absolute_offset + size > pkg.file_size) {
         return std::nullopt;
     }
 
@@ -145,6 +140,10 @@ bool ExtractEntry(
     auto bytes = ReadEntry(pkg_path, pkg, *entry);
     if (!bytes) return false;
 
+    // Create parent directory if missing.
+    std::error_code ec;
+    std::filesystem::create_directories(dest_path.parent_path(), ec);
+
     std::ofstream out(dest_path, std::ios::binary | std::ios::trunc);
     if (!out.is_open()) return false;
     out.write(reinterpret_cast<const char*>(bytes->data()),
@@ -152,46 +151,43 @@ bool ExtractEntry(
     return static_cast<bool>(out);
 }
 
-namespace {
-
-// Map an entry ID to its filename inside `sce_sys/`.
-// Returns std::nullopt for entry IDs we don't care about.
-std::optional<std::string_view> EntryIdToFilename(u32 id) {
-    switch (id) {
-        case PARAM_SFO:        return "param.sfo";
-        case PARAM_SFO_DUP:    return std::nullopt;  // skip duplicate
-        case ICON0_PNG:        return "icon0.png";
-        case PIC1_PNG:         return "pic1.png";
-        case ICON0_HI_PNG:     return "icon0_hi.png";
-        case PIC0_PNG:         return "pic0.png";
-        case SND0_AT9:         return "snd0.at9";
-        case AUTH_INFO:        return std::nullopt;  // skip — debug-only
-        default:               return std::nullopt;
-    }
-}
-
-}  // namespace
-
 std::vector<ExtractedFile> ExtractSceSys(
     const std::filesystem::path& pkg_path,
     const PkgFile& pkg,
     const std::filesystem::path& dest_dir) {
 
     std::vector<ExtractedFile> extracted;
-    extracted.reserve(8);
+    extracted.reserve(16);
 
     std::error_code ec;
     std::filesystem::create_directories(dest_dir, ec);
 
     for (const auto& entry : pkg.entries) {
-        // Skip encrypted entries.
-        if ((entry.entry_flags & PKG_ENTRY_FLAG_ENCRYPTED) != 0) continue;
+        // Skip encrypted entries — they need the crypto pipeline.
+        if ((entry.flags1 & PKG_ENTRY_FLAG_ENCRYPTED) != 0) continue;
 
-        auto filename = EntryIdToFilename(entry.entry_id);
-        if (!filename) continue;
+        // Get the human-readable filename. Unknown entry IDs return an
+        // empty string_view — skip those, they're internal bookkeeping
+        // (digests, metas, etc.) we don't care about for the MVP.
+        auto name_sv = GetEntryNameByType(entry.id);
+        if (name_sv.empty()) continue;
 
-        auto dest = dest_dir / std::string{*filename};
-        if (!ExtractEntry(pkg_path, pkg, entry.entry_id, dest)) {
+        // Skip entries that are clearly not user-facing sce_sys files.
+        // The pkg_type table includes "digests", "entry_keys", "metas",
+        // "entry_names", etc. — these are internal PKG metadata, not
+        // things we want to surface in the library.
+        if (entry.id == 0x0001 ||   // digests
+            entry.id == 0x0010 ||   // entry_keys (encrypted anyway)
+            entry.id == 0x0020 ||   // image_key (encrypted anyway)
+            entry.id == 0x0080 ||   // general_digests
+            entry.id == 0x0100 ||   // metas
+            entry.id == 0x0200) {   // entry_names
+            continue;
+        }
+
+        std::string filename{name_sv};
+        auto dest = dest_dir / filename;
+        if (!ExtractEntry(pkg_path, pkg, entry.id, dest)) {
             continue;
         }
 
@@ -199,14 +195,43 @@ std::vector<ExtractedFile> ExtractSceSys(
         const u64 size = std::filesystem::file_size(dest, sec);
 
         extracted.push_back(ExtractedFile{
-            .entry_id = entry.entry_id,
-            .filename = std::string{*filename},
+            .entry_id = entry.id,
+            .filename = filename,
             .absolute_path = dest,
             .size = size,
         });
     }
 
     return extracted;
+}
+
+std::string DescribeContentFlags(u32 flags) {
+    // Match the flag table from shadPS4Plus's PKG::Open.
+    struct FlagEntry { u32 bit; const char* name; };
+    static constexpr FlagEntry flags_table[] = {
+        {static_cast<u32>(PKGContentFlag::FIRST_PATCH),       "FIRST_PATCH"},
+        {static_cast<u32>(PKGContentFlag::PATCHGO),           "PATCHGO"},
+        {static_cast<u32>(PKGContentFlag::REMASTER),          "REMASTER"},
+        {static_cast<u32>(PKGContentFlag::PS_CLOUD),          "PS_CLOUD"},
+        {static_cast<u32>(PKGContentFlag::GD_AC),             "GD_AC"},
+        {static_cast<u32>(PKGContentFlag::NON_GAME),          "NON_GAME"},
+        {static_cast<u32>(PKGContentFlag::UNKNOWN_0x8000000), "UNKNOWN_0x8000000"},
+        {static_cast<u32>(PKGContentFlag::SUBSEQUENT_PATCH),  "SUBSEQUENT_PATCH"},
+        {static_cast<u32>(PKGContentFlag::DELTA_PATCH),       "DELTA_PATCH"},
+        {static_cast<u32>(PKGContentFlag::CUMULATIVE_PATCH),  "CUMULATIVE_PATCH"},
+    };
+
+    std::string result;
+    for (const auto& f : flags_table) {
+        if ((flags & f.bit) != 0) {
+            if (!result.empty()) result += ", ";
+            result += f.name;
+        }
+    }
+    if (result.empty()) {
+        result = "BASE_GAME";
+    }
+    return result;
 }
 
 }  // namespace Pkg

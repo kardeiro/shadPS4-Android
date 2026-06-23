@@ -306,18 +306,23 @@ Java_com_shadps4_emulator_data_native_ShadPs4Native_nativeInstallPkg(
         std::memcpy(&actual_magic, first_bytes, sizeof(u32));
         char err_buf[256];
         std::snprintf(err_buf, sizeof(err_buf),
-                      "Not a valid PS4 PKG file. Expected magic 0x7F504B47 (\"\\x7FPKG\"), "
-                      "got 0x%08X. The file may be a PS3 PKG (different layout) or "
-                      "simply not a PKG at all.",
+                      "Not a valid PS4 PKG file. Expected magic 0x7F434E54 (\"\\x7FCNT\"), "
+                      "got 0x%08X. The file may be a PS3 PKG (different layout), "
+                      "an ELF/eboot.bin, or simply not a PKG at all.",
                       actual_magic);
         return make_error(err_buf);
     }
     const auto& pkg = *pkg_opt;
-    LOGI("nativeInstallPkg: opened PKG with %u entries, body_offset=%llu, body_size=%llu, drm_free=%d",
-         pkg.entry_count,
-         static_cast<unsigned long long>(pkg.body_offset),
-         static_cast<unsigned long long>(pkg.body_size),
-         pkg.is_drm_free ? 1 : 0);
+    LOGI("nativeInstallPkg: opened PKG — title_id='%s' content_id='%s' entries=%zu "
+         "pfs_offset=%llu pfs_size=%llu drm_free=%d flags=0x%08X (%s)",
+         pkg.title_id.c_str(),
+         pkg.content_id.c_str(),
+         pkg.entries.size(),
+         static_cast<unsigned long long>(pkg.header.pfs_image_offset),
+         static_cast<unsigned long long>(pkg.header.pfs_image_size),
+         pkg.is_drm_free ? 1 : 0,
+         pkg.content_flags,
+         Pkg::DescribeContentFlags(pkg.content_flags).c_str());
 
     // ── Step 3: extract `sce_sys/` plaintext entries into dest_dir ──────
     std::filesystem::create_directories(dest_dir, ec);
