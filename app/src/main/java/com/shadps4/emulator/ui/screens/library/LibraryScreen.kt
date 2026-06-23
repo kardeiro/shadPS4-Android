@@ -79,13 +79,24 @@ fun LibraryScreen(
         }
     }
 
-    // SAF file picker: launches the system file picker for any "*.sfo" file.
-    // Phase 2 will accept "*.pkg" here and route through the PKG installer.
+    // SAF file picker for PKG files.
+    val pickPkg = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri: Uri? ->
+        if (uri != null) {
+            context.contentResolver.takePersistableUriPermission(
+                uri,
+                android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION,
+            )
+            viewModel.installPkg(uri)
+        }
+    }
+
+    // SAF file picker for raw param.sfo files (advanced/manual fallback).
     val pickSfo = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
     ) { uri: Uri? ->
         if (uri != null) {
-            // Persist permission so we can re-read the file later
             context.contentResolver.takePersistableUriPermission(
                 uri,
                 android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION,
@@ -94,13 +105,13 @@ fun LibraryScreen(
         }
     }
 
-    // Snackbar feedback for the import flow.
+    // Snackbar feedback for the import/install flow.
     LaunchedEffect(importState) {
         when (val s = importState) {
             is LibraryViewModel.ImportState.Success -> {
                 scope.launch {
                     snackbarHostState.showSnackbar(
-                        "Imported: ${s.game.title} (${s.game.serial})"
+                        "Installed: ${s.game.title} (${s.game.serial})"
                     )
                     viewModel.resetImportState()
                 }
@@ -114,6 +125,8 @@ fun LibraryScreen(
             else -> Unit
         }
     }
+
+    var showInstallMenu by remember { mutableStateOf(false) }
 
     Box(modifier = Modifier.fillMaxSize()) {
         Column(modifier = Modifier.fillMaxSize()) {
@@ -133,9 +146,7 @@ fun LibraryScreen(
                     modifier = Modifier.weight(1f),
                 )
                 ExtendedFloatingActionButton(
-                    onClick = {
-                        pickSfo.launch(arrayOf("*/*"))
-                    },
+                    onClick = { showInstallMenu = true },
                     icon = {
                         if (importState is LibraryViewModel.ImportState.Loading) {
                             CircularProgressIndicator(
@@ -193,6 +204,44 @@ fun LibraryScreen(
             modifier = Modifier.align(Alignment.BottomCenter),
         ) { data ->
             Snackbar(snackbarData = data)
+        }
+
+        // Install menu (PKG vs raw param.sfo)
+        if (showInstallMenu) {
+            androidx.compose.material3.AlertDialog(
+                onDismissRequest = { showInstallMenu = false },
+                title = { Text("Add game") },
+                text = {
+                    Column {
+                        Text(
+                            "Choose how to add a game to your library:",
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                    }
+                },
+                confirmButton = {
+                    androidx.compose.material3.TextButton(
+                        onClick = {
+                            showInstallMenu = false
+                            pickPkg.launch(arrayOf("*/*"))
+                        }
+                    ) {
+                        Icon(Icons.Rounded.Add, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.size(8.dp))
+                        Text("Install PKG")
+                    }
+                },
+                dismissButton = {
+                    androidx.compose.material3.TextButton(
+                        onClick = {
+                            showInstallMenu = false
+                            pickSfo.launch(arrayOf("*/*"))
+                        }
+                    ) {
+                        Text("Import param.sfo")
+                    }
+                },
+            )
         }
     }
 }

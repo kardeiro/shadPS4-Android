@@ -49,6 +49,29 @@ class LibraryViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /**
+     * Install a PS4 PKG file. The native module extracts the plaintext
+     * `sce_sys/` entries (param.sfo + icon0.png + pic1.png) and adds the
+     * game to the library. See [GameRepository.installFromPkg].
+     */
+    fun installPkg(uri: Uri) {
+        _importState.value = ImportState.Loading
+        viewModelScope.launch {
+            val ctx: Context = getApplication()
+            val result = repository.installFromPkg(ctx, uri)
+            _importState.value = if (result.isSuccess && result.paramSfo != null) {
+                val game = repository.getGameById(result.paramSfo.titleId)
+                if (game != null) {
+                    ImportState.Success(game)
+                } else {
+                    ImportState.Error("PKG extracted but no GameInfo entry was created.")
+                }
+            } else {
+                ImportState.Error(result.error.ifEmpty { "Unknown PKG install error." })
+            }
+        }
+    }
+
     fun resetImportState() { _importState.value = ImportState.Idle }
 
     sealed interface ImportState {

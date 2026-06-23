@@ -32,6 +32,7 @@ add_compile_options(
 add_library(shadps4_native SHARED
     shadps4_jni.cpp
     shadps4/psf.cpp
+    shadps4/pkg.cpp
 )
 
 # Find the Android log library (android/log.h __android_log_print).

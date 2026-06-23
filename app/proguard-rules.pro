@@ -35,3 +35,9 @@
     public <init>(...);
     <fields>;
 }
+
+# Keep PkgInstallResult for the same reason (Phase 2 JNI bridge).
+-keep class com.shadps4.emulator.data.model.PkgInstallResult {
+    public <init>(...);
+    <fields>;
+}

@@ -56,12 +56,14 @@ fun GameCard(
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
     ) {
         Box(modifier = Modifier.fillMaxSize()) {
-            // Cover art (or placeholder gradient)
-            if (game.coverPath != null) {
+            // Cover art (real icon0.png extracted from PKG, or placeholder gradient)
+            if (!game.coverPath.isNullOrBlank()) {
                 AsyncImage(
                     model = game.coverPath,
                     contentDescription = game.title,
                     modifier = Modifier.fillMaxSize(),
+                    errorPainter = painterResource(R.drawable.ic_game_placeholder),
+                    placeholder = painterResource(R.drawable.ic_game_placeholder),
                 )
             } else {
                 Box(
@@ -101,7 +103,7 @@ fun GameCard(
                 }
             }
 
-            // Bottom gradient with title
+            // Bottom gradient with title overlay
             Surface(
                 color = Color.Transparent,
                 modifier = Modifier
@@ -143,6 +145,26 @@ fun GameCard(
                     .align(Alignment.TopEnd)
                     .padding(8.dp),
             )
+
+            // "Installed" indicator (top-left) when the icon came from a real PKG
+            if (!game.coverPath.isNullOrBlank()) {
+                Surface(
+                    color = MaterialTheme.colorScheme.primary,
+                    shape = RoundedCornerShape(8.dp),
+                    modifier = Modifier
+                        .align(Alignment.TopStart)
+                        .padding(8.dp),
+                ) {
+                    Icon(
+                        imageVector = androidx.compose.material.icons.Icons.Rounded.Check,
+                        contentDescription = "Installed",
+                        tint = MaterialTheme.colorScheme.onPrimary,
+                        modifier = Modifier
+                            .padding(4.dp)
+                            .size(14.dp),
+                    )
+                }
+            }
         }
     }
 }
