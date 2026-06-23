@@ -212,35 +212,23 @@ std::vector<ExtractedFile> ExtractSceSys(
 
 // ─── Full PKG extraction (Phase 3) ────────────────────────────────────────
 //
-// Performs the full shadPS4Plus Extract() pipeline:
-//   1. Parse entry table, locate entry_keys (0x10) and image_key (0x20)
-//   2. RSA-2048 decrypt entry_keys[3] → dk3
-//   3. SHA256(entry + dk3) → ivKey
-//   4. AES-CBC decrypt image_key with ivKey → imgKey
-//   5. RSA-2048 decrypt imgKey → ekpfsKey
-//   6. PfsGenCryptoKey(ekpfsKey, seed) → dataKey + tweakKey
-//   7. AES-XTS decrypt PFS image (block by block, 0x1000 each)
-//   8. Find PFSC magic inside decrypted PFS
-//   9. zlib inflate each PFSC compressed block
-//  10. Iterate inodes + dirents to extract individual files
+// NOTE: This function is declared but currently NOT compiled into the
+// library — see pkg.cpp's `#if 0` block. Crypto++ integration with the
+// Android NDK is broken (cryptopp-cmake passes compiler flags as a single
+// string, which clang rejects). The function body is ready; we just need
+// to fix the Crypto++ build before it can be linked.
 //
-// progress_callback is invoked (approximately) once per extracted file
-// with (current_file_index, total_file_count, current_filename). It can
-// be used by the JNI bridge to push progress updates to Kotlin. Pass
-// nullptr to skip.
-//
-// Returns the list of extracted files (including the sce_sys/ entries
-// extracted by ExtractSceSys as well as the PFS files extracted here).
-//
-// Returns an empty vector if extraction failed at any step. The
-// `fail_reason` out-parameter (if non-null) is filled with a human-readable
-// error message describing the failure.
+// The JNI side has a corresponding `nativeInstallPkgFull` that returns
+// an "extraction not available in this build" error if called.
+
+#if 0  // Re-enable once Crypto++ NDK build is fixed.
 std::vector<ExtractedFile> ExtractFull(
     const std::filesystem::path& pkg_path,
     const PkgFile& pkg,
     const std::filesystem::path& dest_dir,
     std::string* fail_reason = nullptr,
     std::function<void(int, int, std::string_view)> progress_callback = nullptr);
+#endif
 
 // Returns a human-readable string listing the PKG content flags set in
 // `flags`. E.g. "FIRST_PATCH, PATCHGO" or "BASE_GAME".

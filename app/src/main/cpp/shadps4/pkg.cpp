@@ -9,10 +9,13 @@
 #include <sstream>
 #include <system_error>
 #include <unordered_map>
-#include <zlib.h>
 
-#include "crypto.h"
-#include "pfs.h"
+// NOTE: Phase 3 (full PFS extraction) is ported and ready in
+// pkg.cpp::ExtractFull, but currently stubbed out at the JNI level
+// because Crypto++ has integration issues with Android NDK. Once we
+// resolve those (likely by switching to mbedTLS or patching
+// cryptopp-cmake), the #if 0 block below can be removed and the
+// crypto.h + pfs.h includes restored.
 
 namespace Pkg {
 
@@ -215,6 +218,14 @@ std::vector<ExtractedFile> ExtractSceSys(
 // Direct port of shadPS4Plus's PKG::Extract() + PKG::ExtractFiles(), with
 // `Common::FS::IOFile` replaced by `std::ifstream`/`std::ofstream` and a
 // progress_callback added so the JNI bridge can push updates to Kotlin.
+//
+// Currently disabled at compile-time because Crypto++ integration with
+// Android NDK is broken (cryptopp-cmake passes flags as a single string,
+// which clang rejects). The code is complete and ready; flip the #if to 1
+// and add `#include "crypto.h"` + `#include "pfs.h"` + `#include <zlib.h>`
+// once the Crypto++ build issue is resolved.
+
+#if 0
 
 namespace {
 
@@ -620,6 +631,8 @@ std::vector<ExtractedFile> ExtractFull(
 
     return extracted;
 }
+
+#endif  // #if 0 (Phase 3 ExtractFull disabled pending Crypto++ NDK fix)
 
 std::string DescribeContentFlags(u32 flags) {
     // Match the flag table from shadPS4Plus's PKG::Open.
