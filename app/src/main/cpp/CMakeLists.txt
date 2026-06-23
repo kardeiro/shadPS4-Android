@@ -31,13 +31,14 @@ add_compile_options(
 # Android NDK ships zlib as a system library; just link `z`.
 
 # ─── Crypto++ (FetchContent + add_subdirectory) ────────────────────────────
-# We use FetchContent to clone Crypto++ source, then add_subdirectory() on
-# it so its full CMake project (which exports the `cryptopp` target with
-# include paths) is built as part of our project. This is more reliable
-# than FetchContent_MakeAvailable for cross-compilation to Android.
+# The main weidai11/cryptopp repo doesn't ship a CMakeLists.txt at the
+# root — the CMake build lives in a separate repo: cryptopp-cmake.
+# We clone both, drop the CMakeLists from cryptopp-cmake into the cryptopp
+# source tree, then add_subdirectory().
 include(FetchContent)
 set(FETCHCONTENT_QUIET OFF)
 
+# Clone the Crypto++ library source (headers + .cpp files).
 FetchContent_Declare(
     cryptopp_src
     GIT_REPOSITORY https://github.com/weidai11/cryptopp.git
@@ -45,6 +46,21 @@ FetchContent_Declare(
     GIT_SHALLOW    TRUE
 )
 FetchContent_Populate(cryptopp_src)
+
+# Clone the CMake build files for Crypto++.
+FetchContent_Declare(
+    cryptopp_cmake
+    GIT_REPOSITORY https://github.com/noloader/cryptopp-cmake.git
+    GIT_TAG        master
+    GIT_SHALLOW    TRUE
+)
+FetchContent_Populate(cryptopp_cmake)
+
+# Copy the CMakeLists.txt and supporting .cmake files from cryptopp-cmake
+# into the cryptopp source tree so add_subdirectory works.
+file(COPY ${cryptopp_cmake_SOURCE_DIR}/CMakeLists.txt DESTINATION ${cryptopp_src_SOURCE_DIR})
+file(COPY ${cryptopp_cmake_SOURCE_DIR}/cryptopp-config.cmake DESTINATION ${cryptopp_src_SOURCE_DIR})
+file(COPY ${cryptopp_cmake_SOURCE_DIR}/TestFindPackage.cmake DESTINATION ${cryptopp_src_SOURCE_DIR} OPTIONAL)
 
 # Crypto++ CMake options: disable tests/examples, build static, no ASM
 # (ASM on Android ARM64 needs setup we don't want to deal with yet).
@@ -54,9 +70,9 @@ set(BUILD_STATIC ON   CACHE BOOL "" FORCE)
 set(cryptopp_DISABLE_ASM ON CACHE BOOL "" FORCE)
 set(CRYPTOPP_BUILD_TEST OFF CACHE BOOL "" FORCE)
 set(CRYPTOPP_BUILD_SHARED OFF CACHE BOOL "" FORCE)
+set(CRYPTOPP_BUILD_STATIC ON CACHE BOOL "" FORCE)
 
-# Add the Crypto++ subdirectory. This defines the `cryptopp-static` target
-# (NOT `cryptopp` — that's the shared lib variant which we disabled).
+# Add Crypto++ as a subdirectory. This defines `cryptopp-static`.
 add_subdirectory(${cryptopp_src_SOURCE_DIR} ${cryptopp_src_BINARY_DIR} EXCLUDE_FROM_ALL)
 
 # ─── shadps4_native shared library ─────────────────────────────────────────

@@ -252,7 +252,7 @@ fun LibraryScreen(
                     }
                 },
                 dismissButton = {
-                    androidx.compose.material3.Row {
+                    Row {
                         androidx.compose.material3.TextButton(
                             onClick = {
                                 showInstallMenu = false
