@@ -30,27 +30,34 @@ add_compile_options(
 # ─── zlib (system-provided in NDK) ─────────────────────────────────────────
 # Android NDK ships zlib as a system library; just link `z`.
 
-# ─── Crypto++ (FetchContent) ───────────────────────────────────────────────
-# We use the official cryptopp CMakeLists; it produces a static `cryptopp`
-# library that we link into our shared module.
+# ─── Crypto++ (FetchContent + add_subdirectory) ────────────────────────────
+# We use FetchContent to clone Crypto++ source, then add_subdirectory() on
+# it so its full CMake project (which exports the `cryptopp` target with
+# include paths) is built as part of our project. This is more reliable
+# than FetchContent_MakeAvailable for cross-compilation to Android.
 include(FetchContent)
 set(FETCHCONTENT_QUIET OFF)
 
-# Pin Crypto++ to a stable release tag.
 FetchContent_Declare(
-    cryptopp
+    cryptopp_src
     GIT_REPOSITORY https://github.com/weidai11/cryptopp.git
     GIT_TAG        CRYPTOPP_8_9_0
     GIT_SHALLOW    TRUE
 )
+FetchContent_Populate(cryptopp_src)
 
-# Crypto++ CMake options: build only what we need (no tests, no examples).
+# Crypto++ CMake options: disable tests/examples, build static, no ASM
+# (ASM on Android ARM64 needs setup we don't want to deal with yet).
 set(BUILD_TESTING OFF CACHE BOOL "" FORCE)
 set(BUILD_SHARED OFF  CACHE BOOL "" FORCE)
 set(BUILD_STATIC ON   CACHE BOOL "" FORCE)
-set(cryptopp_DISABLE_ASM OFF CACHE BOOL "" FORCE)
+set(cryptopp_DISABLE_ASM ON CACHE BOOL "" FORCE)
+set(CRYPTOPP_BUILD_TEST OFF CACHE BOOL "" FORCE)
+set(CRYPTOPP_BUILD_SHARED OFF CACHE BOOL "" FORCE)
 
-FetchContent_MakeAvailable(cryptopp)
+# Add the Crypto++ subdirectory. This defines the `cryptopp-static` target
+# (NOT `cryptopp` — that's the shared lib variant which we disabled).
+add_subdirectory(${cryptopp_src_SOURCE_DIR} ${cryptopp_src_BINARY_DIR} EXCLUDE_FROM_ALL)
 
 # ─── shadps4_native shared library ─────────────────────────────────────────
 add_library(shadps4_native SHARED
@@ -65,14 +72,19 @@ find_library(LOG_LIB log REQUIRED)
 find_library(ANDROID_LIB android REQUIRED)
 find_library(Z_LIB z REQUIRED)
 
+# Link Crypto++ static lib + zlib + android log.
+# `cryptopp-static` is the target name defined by Crypto++'s CMakeLists
+# when BUILD_STATIC=ON.
 target_link_libraries(shadps4_native
     ${LOG_LIB}
     ${ANDROID_LIB}
     ${Z_LIB}
-    cryptopp
+    cryptopp-static
 )
 
+# Crypto++ headers live at the root of the cloned source tree.
 target_include_directories(shadps4_native PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/shadps4
+    ${cryptopp_src_SOURCE_DIR}
 )
