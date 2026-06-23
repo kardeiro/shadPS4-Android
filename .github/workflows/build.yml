@@ -27,7 +27,7 @@ jobs:
   build:
     name: Build APK
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
 
     steps:
       - name: Checkout
@@ -57,6 +57,17 @@ jobs:
             "ndk;27.2.12479018" \
             "cmake;3.22.1"
           $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --list_installed
+
+      - name: Cache Crypto++ source (FetchContent)
+        uses: actions/cache@v4
+        with:
+          path: |
+            app/.cxx
+            ~/app/.cxx
+            $HOME/.cache/cmake
+          key: cryptopp-${{ runner.os }}-8.9.0
+          restore-keys: |
+            cryptopp-${{ runner.os }}-
 
       - name: Cache Gradle
         uses: actions/cache@v4

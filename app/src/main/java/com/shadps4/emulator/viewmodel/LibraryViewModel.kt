@@ -61,11 +61,29 @@ class LibraryViewModel(app: Application) : AndroidViewModel(app) {
             val result = repository.installFromPkg(ctx, uri)
             _importState.value = if (result.isSuccess && result.paramSfo != null) {
                 val game = repository.getGameById(result.paramSfo.titleId)
-                if (game != null) {
-                    ImportState.Success(game)
-                } else {
-                    ImportState.Error("PKG extracted but no GameInfo entry was created.")
-                }
+                if (game != null) ImportState.Success(game)
+                else ImportState.Error("PKG extracted but no GameInfo entry was created.")
+            } else {
+                ImportState.Error(result.error.ifEmpty { "Unknown PKG install error." })
+            }
+        }
+    }
+
+    /**
+     * Phase 3: full PKG install (RSA + AES-XTS + zlib, FPKG only).
+     * Use this for FPKG files where you want the complete game extracted
+     * (not just metadata). Slower than [installPkg] — emits progress via
+     * [repository.installProgress].
+     */
+    fun installPkgFull(uri: Uri) {
+        _importState.value = ImportState.Loading
+        viewModelScope.launch {
+            val ctx: Context = getApplication()
+            val result = repository.installFullFromPkg(ctx, uri)
+            _importState.value = if (result.isSuccess && result.paramSfo != null) {
+                val game = repository.getGameById(result.paramSfo.titleId)
+                if (game != null) ImportState.Success(game)
+                else ImportState.Error("PKG extracted but no GameInfo entry was created.")
             } else {
                 ImportState.Error(result.error.ifEmpty { "Unknown PKG install error." })
             }

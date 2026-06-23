@@ -79,7 +79,7 @@ fun LibraryScreen(
         }
     }
 
-    // SAF file picker for PKG files.
+    // SAF file picker for PKG files (metadata-only install).
     val pickPkg = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
     ) { uri: Uri? ->
@@ -89,6 +89,19 @@ fun LibraryScreen(
                 android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION,
             )
             viewModel.installPkg(uri)
+        }
+    }
+
+    // SAF file picker for PKG files (full install with crypto + zlib).
+    val pickPkgFull = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri: Uri? ->
+        if (uri != null) {
+            context.contentResolver.takePersistableUriPermission(
+                uri,
+                android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION,
+            )
+            viewModel.installPkgFull(uri)
         }
     }
 
@@ -206,16 +219,23 @@ fun LibraryScreen(
             Snackbar(snackbarData = data)
         }
 
-        // Install menu (PKG vs raw param.sfo)
+        // Install menu (PKG metadata-only, PKG full, or raw param.sfo)
         if (showInstallMenu) {
             androidx.compose.material3.AlertDialog(
                 onDismissRequest = { showInstallMenu = false },
                 title = { Text("Add game") },
                 text = {
-                    Column {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text(
-                            "Choose how to add a game to your library:",
+                            "Choose how to add a game:",
                             style = MaterialTheme.typography.bodyMedium,
+                        )
+                        Text(
+                            "• Install PKG (fast) — extracts metadata + cover only\n" +
+                                "• Full Install PKG — extracts the entire game (FPKG only, slower)\n" +
+                                "• Import param.sfo — for already-extracted PKGs",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
                 },
@@ -232,13 +252,23 @@ fun LibraryScreen(
                     }
                 },
                 dismissButton = {
-                    androidx.compose.material3.TextButton(
-                        onClick = {
-                            showInstallMenu = false
-                            pickSfo.launch(arrayOf("*/*"))
+                    androidx.compose.material3.Row {
+                        androidx.compose.material3.TextButton(
+                            onClick = {
+                                showInstallMenu = false
+                                pickPkgFull.launch(arrayOf("*/*"))
+                            }
+                        ) {
+                            Text("Full Install")
                         }
-                    ) {
-                        Text("Import param.sfo")
+                        androidx.compose.material3.TextButton(
+                            onClick = {
+                                showInstallMenu = false
+                                pickSfo.launch(arrayOf("*/*"))
+                            }
+                        ) {
+                            Text("param.sfo")
+                        }
                     }
                 },
             )

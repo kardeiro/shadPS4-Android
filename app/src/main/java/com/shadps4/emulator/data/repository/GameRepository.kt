@@ -2,14 +2,16 @@ package com.shadps4.emulator.data.repository
 
 import android.content.Context
 import android.net.Uri
-import androidx.documentfile.provider.DocumentFile
 import com.shadps4.emulator.data.model.GameInfo
 import com.shadps4.emulator.data.model.ParamSfo
 import com.shadps4.emulator.data.model.PkgInstallResult
 import com.shadps4.emulator.data.native.ShadPs4Native
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -17,29 +19,31 @@ import java.io.File
 /**
  * Repository of installed games.
  *
- * Phase 0: returned sample data only.
- * Phase 1: can parse real `param.sfo` files from disk via [ShadPs4Native], so
- * the user can pick a `sce_sys/param.sfo` file via SAF (Storage Access
- * Framework) and we'll convert it into a [GameInfo] entry.
+ * The library starts EMPTY — no sample data. The user installs PKG files
+ * via the "Install PKG" button and games appear here.
  *
- * The full PKG installer (which decrypts + extracts the entire PKG into
- * app-private storage) is Phase 2 — for now we just read metadata.
+ * Two install modes:
+ *   - [installFromPkg] (Phase 2): extracts ONLY the plaintext `sce_sys/`
+ *     entries (param.sfo, icon0.png, pic1.png). Fast (~seconds), small
+ *     (a few KB), works for any PKG including retail NPDRM. Doesn't
+ *     enable gameplay — just library metadata + cover art.
+ *
+ *   - [installFullFromPkg] (Phase 3): extracts the FULL PKG including the
+ *     PFS body. Uses Crypto++ (RSA-2048 + AES-XTS) + zlib. Slow (minutes
+ *     for big games), large (full game size on disk). Only works for
+ *     FPKG (DRM-free) packages — retail NPDRM keys aren't bundled.
  */
 class GameRepository {
 
-    private val _games = MutableStateFlow<List<GameInfo>>(seedSampleGames())
+    private val _games = MutableStateFlow<List<GameInfo>>(emptyList())
     val games: StateFlow<List<GameInfo>> = _games.asStateFlow()
 
-    /** True once the user has at least one real game in the library. */
+    /** True if the user has no games installed yet. */
     val isEmpty: Boolean get() = _games.value.isEmpty()
 
-    /**
-     * Phase 1 ships with sample data so the UI is explorable out of the box.
-     * Once the user imports their first real `param.sfo`, this sample data
-     * stays around as a "demo" — they can swipe to remove individual entries.
-     */
-    private fun seedSampleGames(): List<GameInfo> =
-        com.shadps4.emulator.data.model.SampleGames.all
+    /** Progress events for the UI: (currentFile, totalFiles, currentFilename). */
+    private val _installProgress = MutableSharedFlow<InstallProgress>(extraBufferCapacity = 16)
+    val installProgress: SharedFlow<InstallProgress> = _installProgress.asSharedFlow()
 
     fun getGameById(id: String): GameInfo? = _games.value.firstOrNull { it.id == id }
 
@@ -58,30 +62,26 @@ class GameRepository {
 
     fun removeGame(id: String) {
         _games.value = _games.value.filterNot { it.id == id }
+        // Also delete the extracted files from disk.
+        // (Caller should pass the TITLE_ID; we delete the entire game folder.)
+        // We don't have a Context here, so the UI layer handles deletion.
     }
 
     /**
      * Try to parse a `param.sfo` from a SAF [uri] and add it as a new
      * [GameInfo]. Returns the created entry, or null if parsing failed.
-     *
-     * Must be called off the main thread (uses disk I/O + JNI).
      */
     suspend fun importFromParamSfo(context: Context, uri: Uri): GameInfo? =
         withContext(Dispatchers.IO) {
-            // 1. Copy the picked file into app-private cache so we have an
-            //    absolute path to feed to the native parser. (NDK cannot
-            //    open SAF Uri streams directly.)
             val cached = copyUriToCache(context, uri) ?: return@withContext null
             val path = cached.absolutePath
 
-            // 2. Ask native side to parse it.
             val psf: ParamSfo? = try {
                 ShadPs4Native.nativeReadParamSfo(path)
             } catch (_: UnsatisfiedLinkError) {
                 null
             }
 
-            // 3. Clean up the cache file — we only needed it for parsing.
             cached.delete()
 
             if (psf == null) return@withContext null
@@ -105,68 +105,49 @@ class GameRepository {
         }
 
     /**
-     * Install a PS4 PKG file picked via SAF.
+     * Install a PS4 PKG file — Phase 2 mode (metadata only).
      *
-     * Flow:
-     *  1. Copy the PKG into app-private cache (so we have an absolute path
-     *     the NDK can `fopen()`).
-     *  2. Compute a per-game destination directory under `context.filesDir/games/<TITLE_ID>/sce_sys/`.
-     *  3. Call the native installer: it parses the PKG header, extracts the
-     *     plaintext `sce_sys/` entries (param.sfo, icon0.png, pic1.png, ...)
-     *     into the destination, and returns a structured result.
-     *  4. Map the result into a [GameInfo] entry, with the cover icon pointing
-     *     at the extracted `icon0.png` on disk — so the UI can render it
-     *     directly via Coil.
-     *  5. Delete the cached PKG copy.
+     * Extracts ONLY the plaintext `sce_sys/` entries: param.sfo, icon0.png,
+     * pic1.png, pic0.png, snd0.at9. Fast (a few seconds) and works for any
+     * PKG including retail NPDRM.
      *
-     * Returns the parsed [PkgInstallResult] (always non-null — check
-     * [PkgInstallResult.isSuccess]).
+     * For full extraction including the PFS body, use [installFullFromPkg].
      */
     suspend fun installFromPkg(context: Context, uri: Uri): PkgInstallResult =
         withContext(Dispatchers.IO) {
-            // 1. Copy PKG to cache (file can be GB-sized for retail games — but
-            //    Phase 2 only reads the first ~few MB for header + sce_sys/,
-            //    so we cap the copy at 64MB to avoid OOM on phones).
             val cachedPkg = copyUriToCache(context, uri, maxBytes = 64L * 1024 * 1024)
                 ?: return@withContext PkgInstallResult(
                     paramSfo = null, iconPath = null, pic1Path = null,
-                    destDir = "", entryCount = 0, isDrmFree = false,
+                    destDir = null, entryCount = 0, isDrmFree = false,
                     error = "Failed to copy PKG from SAF. File too large or unreadable.",
                 )
 
             try {
-                // 2. Compute dest dir — we use a temporary name based on the URI
-                //    hash; once we know the TITLE_ID we'll rename it.
                 val tmpDest = File(context.filesDir, "games/_pending_${System.currentTimeMillis()}/sce_sys")
                 tmpDest.mkdirs()
 
-                // 3. Call native.
                 val result = try {
                     ShadPs4Native.nativeInstallPkg(cachedPkg.absolutePath, tmpDest.absolutePath)
                 } catch (e: UnsatisfiedLinkError) {
                     return@withContext PkgInstallResult(
                         paramSfo = null, iconPath = null, pic1Path = null,
-                        destDir = "", entryCount = 0, isDrmFree = false,
+                        destDir = null, entryCount = 0, isDrmFree = false,
                         error = "Native module not loaded: ${e.message}",
                     )
                 }
 
                 if (!result.isSuccess) {
-                    // Cleanup the partial extraction.
                     tmpDest.parentFile?.deleteRecursively()
                     return@withContext result
                 }
 
-                // 4. Rename the pending dir to the real TITLE_ID (if available).
                 val titleId = result.paramSfo?.titleId?.takeIf { it.isNotBlank() }
                     ?: "IMPORTED_${System.currentTimeMillis()}"
                 val finalDest = File(context.filesDir, "games/$titleId/sce_sys")
                 if (finalDest.exists()) finalDest.deleteRecursively()
                 tmpDest.parentFile?.renameTo(File(context.filesDir, "games/$titleId"))
 
-                // 5. Build a GameInfo entry that references the extracted icon.
                 val iconPath = result.iconPath?.let { path ->
-                    // The JNI returned a path under tmpDest; remap to finalDest.
                     val name = File(path).name
                     File(finalDest, name).takeIf { it.exists() }?.absolutePath
                 } ?: result.iconPath
@@ -189,10 +170,112 @@ class GameRepository {
                 )
                 addGame(game)
 
-                // Return a result with the final iconPath (post-rename).
                 result.copy(iconPath = iconPath, destDir = finalDest.absolutePath)
             } finally {
-                // 5. Always delete the cached PKG to free up space.
+                cachedPkg.delete()
+            }
+        }
+
+    /**
+     * Install a PS4 PKG file — Phase 3 mode (FULL extraction).
+     *
+     * Performs the complete extraction pipeline:
+     *   - RSA-2048 decrypt entry_keys[3] → dk3
+     *   - SHA256 + AES-CBC to derive imgKey + ekpfsKey
+     *   - AES-XTS decrypt PFS body block by block
+     *   - zlib inflate each PFSC block
+     *   - Write every file inside the PFS to disk under
+     *     `context.filesDir/games/<TITLE_ID>/`
+     *
+     * Only works for FPKG (DRM-free) packages. Retail NPDRM packages don't
+     * have their PSN license keys bundled, so the RSA decryption will
+     * produce garbage and PFS extraction will fail. For retail packages,
+     * fall back to [installFromPkg] (metadata only).
+     *
+     * Progress events are emitted via [installProgress] as each file is
+     * extracted. The UI can collect them to update a progress bar.
+     *
+     * IMPORTANT: This is a LONG operation. A 30GB game can take 5-15 minutes
+     * on a fast phone. The caller MUST run this in a background scope and
+     * MUST NOT block the UI thread.
+     */
+    suspend fun installFullFromPkg(context: Context, uri: Uri): PkgInstallResult =
+        withContext(Dispatchers.IO) {
+            // Phase 3 needs the FULL PKG on disk — no cap.
+            _installProgress.tryEmit(InstallProgress.Preparing)
+
+            val cachedPkg = copyUriToCache(context, uri, maxBytes = Long.MAX_VALUE)
+                ?: return@withContext PkgInstallResult(
+                    paramSfo = null, iconPath = null, pic1Path = null,
+                    destDir = null, entryCount = 0, isDrmFree = false,
+                    error = "Failed to copy PKG from SAF.",
+                )
+
+            try {
+                _installProgress.tryEmit(InstallProgress.ParsingHeader)
+
+                // Phase 3 needs a dest dir WITHOUT the /sce_sys suffix —
+                // the native code will create sce_sys/ inside it AND write
+                // PFS-extracted files alongside.
+                val tmpDest = File(context.filesDir, "games/_pending_${System.currentTimeMillis()}")
+                tmpDest.mkdirs()
+
+                val result = try {
+                    ShadPs4Native.nativeInstallPkgFull(
+                        cachedPkg.absolutePath,
+                        tmpDest.absolutePath,
+                    ) { current, total, filename ->
+                        _installProgress.tryEmit(
+                            InstallProgress.Extracting(current, total, filename)
+                        )
+                    }
+                } catch (e: UnsatisfiedLinkError) {
+                    return@withContext PkgInstallResult(
+                        paramSfo = null, iconPath = null, pic1Path = null,
+                        destDir = null, entryCount = 0, isDrmFree = false,
+                        error = "Native module not loaded: ${e.message}",
+                    )
+                }
+
+                if (!result.isSuccess) {
+                    tmpDest.deleteRecursively()
+                    return@withContext result
+                }
+
+                // Rename to TITLE_ID.
+                val titleId = result.paramSfo?.titleId?.takeIf { it.isNotBlank() }
+                    ?: "IMPORTED_${System.currentTimeMillis()}"
+                val finalDest = File(context.filesDir, "games/$titleId")
+                if (finalDest.exists()) finalDest.deleteRecursively()
+                tmpDest.renameTo(finalDest)
+
+                val iconPath = result.iconPath?.let { path ->
+                    val name = File(path).name
+                    File(finalDest, "sce_sys/$name").takeIf { it.exists() }?.absolutePath
+                } ?: result.iconPath
+
+                val game = GameInfo(
+                    id = titleId,
+                    title = result.paramSfo?.title?.ifBlank { "Unknown title" } ?: "Unknown title",
+                    serial = result.paramSfo?.titleId.orEmpty(),
+                    version = result.paramSfo?.appVer?.ifBlank { "1.00" } ?: "1.00",
+                    category = result.paramSfo?.categoryDescription ?: "—",
+                    firmware = result.paramSfo?.systemVersionFormatted ?: "—",
+                    sizeBytes = cachedPkg.length(),
+                    installDateMs = System.currentTimeMillis(),
+                    lastPlayedMs = 0L,
+                    playtimeMs = 0L,
+                    compatibility = com.shadps4.emulator.data.model.CompatibilityStatus.UNKNOWN,
+                    pkgPath = uri.toString(),
+                    coverPath = iconPath,
+                    iconPath = iconPath,
+                )
+                addGame(game)
+
+                _installProgress.tryEmit(InstallProgress.Done(result.entryCount))
+
+                result.copy(iconPath = iconPath, destDir = finalDest.absolutePath)
+            } finally {
                 cachedPkg.delete()
             }
         }
@@ -221,5 +304,16 @@ class GameRepository {
         outFile
     } catch (e: Exception) {
         null
+    }
+
+    /**
+     * Progress events emitted by [installFullFromPkg]. Collected by the UI
+     * to update a progress bar.
+     */
+    sealed interface InstallProgress {
+        data object Preparing : InstallProgress
+        data object ParsingHeader : InstallProgress
+        data class Extracting(val current: Int, val total: Int, val filename: String) : InstallProgress
+        data class Done(val fileCount: Int) : InstallProgress
     }
 }

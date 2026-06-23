@@ -7,16 +7,14 @@ import com.shadps4.emulator.data.model.PkgInstallResult
  * Thin Kotlin façade over the native (C++) module loaded via NDK.
  *
  * Phase 1: PSF (param.sfo) parser.
- * Phase 2: PKG installer (extracts `sce_sys/` plaintext entries only).
- *
- * As we port more subsystems from shadPS4 (ELF loader, shader_recompiler,
- * video_core), we'll add more `native*` declarations here.
+ * Phase 2: PKG installer (sce_sys/ plaintext entries only).
+ * Phase 3: Full PKG installer (RSA + AES-XTS + zlib, FPKG only).
  *
  * NOTE: `package com.shadps4.emulator.data.native` would clash with the
  * Kotlin `native` keyword if we used it as an identifier, but as a package
  * name it's fine. The JVM class name is what matters for JNI binding:
  *
- *   Java_com_shadps4_emulator_data_native_ShadPs4Native_nativeInstallPkg
+ *   Java_com_shadps4_emulator_data_native_ShadPs4Native_nativeInstallPkgFull
  */
 object ShadPs4Native {
 
@@ -37,19 +35,48 @@ object ShadPs4Native {
     external fun nativeReadParamSfo(absolutePath: String): ParamSfo?
 
     /**
-     * Install a PS4 PKG file: extract `sce_sys/` plaintext entries
-     * (param.sfo, icon0.png, pic1.png) into [destDir], parse param.sfo,
-     * and return a structured result.
+     * Phase 2: install a PS4 PKG file (metadata only).
      *
-     * @param pkgPath Absolute path to the .pkg file. Must be readable by the
-     *                app — copy from a SAF Uri into cache first if needed.
+     * Extracts ONLY the plaintext `sce_sys/` entries: param.sfo, icon0.png,
+     * pic1.png, pic0.png, snd0.at9. No crypto required — works for any PKG
+     * including retail NPDRM.
+     *
+     * @param pkgPath Absolute path to the .pkg file on disk.
      * @param destDir Absolute path of the destination directory. Will be
-     *                created if missing. Should live under app-private
-     *                storage (e.g. `context.filesDir`).
+     *                created if missing. Should be `<filesDir>/games/<TITLE_ID>/sce_sys/`.
      * @return [PkgInstallResult]. Always non-null — check [PkgInstallResult.isSuccess].
      */
     @JvmStatic
     external fun nativeInstallPkg(pkgPath: String, destDir: String): PkgInstallResult
+
+    /**
+     * Phase 3: full PKG install (RSA + AES-XTS + zlib, FPKG only).
+     *
+     * Extracts the COMPLETE PKG including the encrypted PFS body. Uses
+     * Crypto++ for RSA-2048 + AES-XTS and zlib for PFSC decompression.
+     * Only works for FPKG (DRM-free) packages — retail NPDRM keys aren't
+     * bundled for legal reasons.
+     *
+     * [progressCallback] is invoked (approximately) once per extracted file
+     * with (currentFile, totalFiles, currentFilename). The Kotlin side
+     * typically forwards this to a SharedFlow for the UI to render a
+     * progress bar.
+     *
+     * @param pkgPath Absolute path to the .pkg file on disk (full size,
+     *                no cap — the native side reads it directly via fopen).
+     * @param destDir Absolute path of the destination directory. Should be
+     *                `<filesDir>/games/<TITLE_ID>/` (without the `/sce_sys`
+     *                suffix — the native code creates sce_sys/ inside it AND
+     *                writes PFS-extracted files alongside).
+     * @return [PkgInstallResult]. Always non-null — check [PkgInstallResult.isSuccess].
+     *         On failure, [PkgInstallResult.error] explains which step failed.
+     */
+    @JvmStatic
+    external fun nativeInstallPkgFull(
+        pkgPath: String,
+        destDir: String,
+        progressCallback: PkgProgressCallback,
+    ): PkgInstallResult
 
     /** Returns a version string for the native module. Useful for diagnostics. */
     @JvmStatic
@@ -67,4 +94,22 @@ object ShadPs4Native {
         }
     }
 }
+
+/**
+ * JNI callback interface for [ShadPs4Native.nativeInstallPkgFull] progress.
+ *
+ * Implemented as a SAM interface so Kotlin callers can pass a lambda:
+ * ```
+ * ShadPs4Native.nativeInstallPkgFull(path, dest) { cur, total, name ->
+ *     println("Extracting $cur/$total: $name")
+ * }
+ * ```
+ *
+ * Note: this MUST be a `fun interface` (SAM) so the JNI side can call it
+ * via `CallVoidMethod` on the lambda's synthesized class.
+ */
+fun interface PkgProgressCallback {
+    fun onProgress(current: Int, total: Int, filename: String)
+}
+
 

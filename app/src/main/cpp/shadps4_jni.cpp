@@ -136,7 +136,7 @@ Java_com_shadps4_emulator_data_native_ShadPs4Native_nativeReadParamSfo(
 extern "C" JNIEXPORT jstring JNICALL
 Java_com_shadps4_emulator_data_native_ShadPs4Native_nativeVersion(
     JNIEnv* env, jobject /* thiz */) {
-    return env->NewStringUTF("shadps4-android native v0.2.0 (psf + pkg parser)");
+    return env->NewStringUTF("shadps4-android native v0.3.0 (psf + pkg + pfs full extract)");
 }
 
 // ─── PKG installer ──────────────────────────────────────────────────────────
@@ -414,6 +414,205 @@ Java_com_shadps4_emulator_data_native_ShadPs4Native_nativeInstallPkg(
         /*entryCount*/ static_cast<jint>(extracted.size()),
         /*isDrmFree*/ pkg.is_drm_free ? JNI_TRUE : JNI_FALSE,
         /*error*/ env->NewStringUTF(""));
+
+    if (j_psf) env->DeleteLocalRef(j_psf);
+    if (j_icon) env->DeleteLocalRef(j_icon);
+    if (j_pic1) env->DeleteLocalRef(j_pic1);
+    env->DeleteLocalRef(j_dest);
+    env->DeleteLocalRef(result_clazz);
+
+    return result;
+}
+
+// ─── Phase 3: full PKG install (RSA + AES-XTS + zlib) ──────────────────────
+//
+// Same return shape as nativeInstallPkg, but performs the full extraction
+// pipeline via Pkg::ExtractFull(). The Java side passes a PkgProgressCallback
+// SAM lambda that we invoke (via CallVoidMethod) once per extracted file.
+
+extern "C" JNIEXPORT jobject JNICALL
+Java_com_shadps4_emulator_data_native_ShadPs4Native_nativeInstallPkgFull(
+    JNIEnv* env, jobject /* thiz */, jstring j_pkg_path, jstring j_dest_dir,
+    jobject progress_callback) {
+
+    const char* pkg_chars = env->GetStringUTFChars(j_pkg_path, nullptr);
+    const char* dest_chars = env->GetStringUTFChars(j_dest_dir, nullptr);
+    std::filesystem::path pkg_path{pkg_chars};
+    std::filesystem::path dest_dir{dest_chars};
+    env->ReleaseStringUTFChars(j_pkg_path, pkg_chars);
+    env->ReleaseStringUTFChars(j_dest_dir, dest_chars);
+
+    LOGI("nativeInstallPkgFull: pkg='%s' dest='%s'",
+         pkg_path.string().c_str(), dest_dir.string().c_str());
+
+    // Look up the PkgInstallResult class + ctor (same signature as Phase 2).
+    const char* kResultClass = "com/shadps4/emulator/data/model/PkgInstallResult";
+    jclass result_clazz = FindClassOrLog(env, kResultClass);
+    if (result_clazz == nullptr) return nullptr;
+
+    const char* kCtorSig =
+        "(Lcom/shadps4/emulator/data/model/ParamSfo;"
+        "Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;"
+        "IZLjava/lang/String;)V";
+    jmethodID ctor = env->GetMethodID(result_clazz, "<init>", kCtorSig);
+    if (ctor == nullptr) {
+        LOGE("PkgInstallResult ctor not found");
+        env->DeleteLocalRef(result_clazz);
+        return nullptr;
+    }
+
+    auto make_error = [&](const std::string& msg) -> jobject {
+        LOGE("nativeInstallPkgFull error: %s", msg.c_str());
+        jstring j_msg = env->NewStringUTF(msg.c_str());
+        jobject r = env->NewObject(
+            result_clazz, ctor,
+            nullptr, nullptr, nullptr, nullptr, 0, JNI_FALSE, j_msg);
+        env->DeleteLocalRef(j_msg);
+        env->DeleteLocalRef(result_clazz);
+        return r;
+    };
+
+    // Resolve the SAM callback interface method `onProgress(III)V` on the
+    // PkgProgressCallback lambda. Also look up the String class for the
+    // filename argument.
+    jclass callback_clazz = env->GetObjectClass(progress_callback);
+    jmethodID on_progress = nullptr;
+    if (callback_clazz != nullptr) {
+        // The Kotlin `fun interface PkgProgressCallback { fun onProgress(...) }`
+        // compiles to a single abstract method `onProgress(ILjava/lang/String;)V`
+        // — but Kotlin SAMs actually expose the method with the name `onProgress`.
+        on_progress = env->GetMethodID(callback_clazz, "onProgress", "(IILjava/lang/String;)V");
+        if (on_progress == nullptr) {
+            // Try the synthetic invoke() method that Kotlin generates.
+            on_progress = env->GetMethodID(callback_clazz, "invoke", "(IILjava/lang/String;)V");
+        }
+        env->DeleteLocalRef(callback_clazz);
+    }
+
+    // Parse the PKG header first (Pkg::ExtractFull expects a PkgFile).
+    auto pkg_opt = Pkg::Open(pkg_path);
+    if (!pkg_opt) {
+        u8 first_bytes[4] = {};
+        std::ifstream peek(pkg_path, std::ios::binary);
+        peek.read(reinterpret_cast<char*>(first_bytes), 4);
+        u32 actual_magic = 0;
+        std::memcpy(&actual_magic, first_bytes, 4);
+        char err_buf[256];
+        std::snprintf(err_buf, sizeof(err_buf),
+                      "Not a valid PS4 PKG (magic=0x%08X, expected 0x7F434E54).",
+                      actual_magic);
+        return make_error(err_buf);
+    }
+    const auto& pkg = *pkg_opt;
+
+    LOGI("nativeInstallPkgFull: title_id='%s' entries=%zu pfs_offset=%llu pfs_size=%llu drm_free=%d",
+         pkg.title_id.c_str(), pkg.entries.size(),
+         static_cast<unsigned long long>(pkg.header.pfs_image_offset),
+         static_cast<unsigned long long>(pkg.header.pfs_image_size),
+         pkg.is_drm_free ? 1 : 0);
+
+    if (!pkg.is_drm_free) {
+        LOGW("nativeInstallPkgFull: PKG is retail NPDRM (not FPKG) — full extraction will fail at RSA step");
+        // Don't bail out — let the user see the actual crypto failure in
+        // the error message. Pkg::ExtractFull will produce a precise error.
+    }
+
+    // Run the full extraction. The progress_callback thunk translates C++
+    // std::function invocations into JNI CallVoidMethod calls.
+    std::string fail_reason;
+    std::function<void(int, int, std::string_view)> cb;
+    if (on_progress != nullptr) {
+        cb = [env, progress_callback, on_progress](int cur, int total, std::string_view name) {
+            // Local refs are auto-freed when this frame returns.
+            jstring j_name = env->NewStringUTF(std::string{name}.c_str());
+            env->CallVoidMethod(progress_callback, on_progress,
+                                static_cast<jint>(cur),
+                                static_cast<jint>(total),
+                                j_name);
+            env->DeleteLocalRef(j_name);
+            if (env->ExceptionCheck()) {
+                env->ExceptionClear();
+            }
+        };
+    }
+
+    auto extracted = Pkg::ExtractFull(pkg_path, pkg, dest_dir, &fail_reason, cb);
+    if (extracted.empty() && !fail_reason.empty()) {
+        return make_error(fail_reason);
+    }
+
+    // Parse the extracted param.sfo (if present) — same logic as Phase 2.
+    const std::filesystem::path sfo_path = dest_dir / "sce_sys" / "param.sfo";
+    jobject j_psf = nullptr;
+    if (std::filesystem::exists(sfo_path)) {
+        PSF psf;
+        if (psf.Open(sfo_path)) {
+            const char* kParamSfoClass = "com/shadps4/emulator/data/model/ParamSfo";
+            jclass psf_clazz = FindClassOrLog(env, kParamSfoClass);
+            if (psf_clazz != nullptr) {
+                const char* kPsfCtorSig =
+                    "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;"
+                    "Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;"
+                    "Ljava/lang/String;II)V";
+                jmethodID psf_ctor = env->GetMethodID(psf_clazz, "<init>", kPsfCtorSig);
+                if (psf_ctor != nullptr) {
+                    auto opt_str = [&](std::string_view k) -> jstring {
+                        auto v = psf.GetString(k);
+                        return v ? env->NewStringUTF(std::string{*v}.c_str())
+                                 : env->NewStringUTF("");
+                    };
+                    auto opt_int = [&](std::string_view k, jint fb) -> jint {
+                        auto v = psf.GetInteger(k);
+                        return v.value_or(fb);
+                    };
+                    jstring j_title        = opt_str("TITLE");
+                    jstring j_title_id     = opt_str("TITLE_ID");
+                    jstring j_app_ver      = opt_str("APP_VER");
+                    jstring j_category     = opt_str("CATEGORY");
+                    jstring j_pub_tool_inf = opt_str("PUBTOOLINFO");
+                    jstring j_content_id   = opt_str("CONTENT_ID");
+                    jstring j_subtitle     = opt_str("SUB_TITLE");
+                    jint    j_system_ver   = opt_int("SYSTEM_VER", 0);
+                    jint    j_attribute    = opt_int("ATTRIBUTE", 0);
+
+                    j_psf = env->NewObject(
+                        psf_clazz, psf_ctor,
+                        j_title, j_title_id, j_app_ver, j_category,
+                        j_pub_tool_inf, j_content_id, j_subtitle,
+                        j_system_ver, j_attribute);
+
+                    env->DeleteLocalRef(j_title);
+                    env->DeleteLocalRef(j_title_id);
+                    env->DeleteLocalRef(j_app_ver);
+                    env->DeleteLocalRef(j_category);
+                    env->DeleteLocalRef(j_pub_tool_inf);
+                    env->DeleteLocalRef(j_content_id);
+                    env->DeleteLocalRef(j_subtitle);
+                }
+                env->DeleteLocalRef(psf_clazz);
+            }
+        }
+    }
+
+    // Resolve icon0.png and pic1.png paths.
+    jstring j_icon = nullptr;
+    jstring j_pic1 = nullptr;
+    jstring j_dest = env->NewStringUTF(dest_dir.string().c_str());
+    for (const auto& e : extracted) {
+        const std::string fname = e.absolute_path.filename().string();
+        if (fname == "icon0.png" && j_icon == nullptr) {
+            j_icon = env->NewStringUTF(e.absolute_path.string().c_str());
+        } else if (fname == "pic1.png" && j_pic1 == nullptr) {
+            j_pic1 = env->NewStringUTF(e.absolute_path.string().c_str());
+        }
+    }
+
+    jobject result = env->NewObject(
+        result_clazz, ctor,
+        j_psf, j_icon, j_pic1, j_dest,
+        static_cast<jint>(extracted.size()),
+        pkg.is_drm_free ? JNI_TRUE : JNI_FALSE,
+        env->NewStringUTF(""));
 
     if (j_psf) env->DeleteLocalRef(j_psf);
     if (j_icon) env->DeleteLocalRef(j_icon);
