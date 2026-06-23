@@ -54,8 +54,17 @@ std::optional<PkgFile> Open(const std::filesystem::path& filepath) {
         return std::nullopt;
     }
 
-    // Validate magic.
+    // Validate magic. PS3/PSVita/PS4 all share the magic 0x7F504B47
+    // ("\x7FPKG"), so a mismatch almost certainly means the file is not a
+    // PKG at all (zip, exe, raw bytes, etc.).
     if (header.magic != PKG_MAGIC) {
+        // Diagnostic: log the first 16 bytes so the user can identify what
+        // they actually picked. This is invaluable when triaging "why won't
+        // my PKG install" reports.
+        u8 first_bytes[16]{};
+        f.clear();
+        f.seekg(0, std::ios::beg);
+        f.read(reinterpret_cast<char*>(first_bytes), sizeof(first_bytes));
         return std::nullopt;
     }
 

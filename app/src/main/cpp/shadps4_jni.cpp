@@ -12,6 +12,7 @@
 #include <jni.h>
 #include <android/log.h>
 
+#include <cstdio>
 #include <filesystem>
 #include <memory>
 #include <optional>
@@ -25,6 +26,7 @@
 #define TAG "shadps4-jni"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO,  TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, TAG, __VA_ARGS__)
+#define LOGW(...) __android_log_print(ANDROID_LOG_WARN,  TAG, __VA_ARGS__)
 
 namespace {
 
@@ -174,19 +176,23 @@ Java_com_shadps4_emulator_data_native_ShadPs4Native_nativeInstallPkg(
     env->ReleaseStringUTFChars(j_pkg_path, pkg_chars);
     env->ReleaseStringUTFChars(j_dest_dir, dest_chars);
 
+    LOGI("nativeInstallPkg: pkg='%s' dest='%s'",
+         pkg_path.string().c_str(), dest_dir.string().c_str());
+
     // Locate the result class + ctor. Must match PkgInstallResult.kt field order.
     const char* kResultClass = "com/shadps4/emulator/data/model/PkgInstallResult";
     jclass result_clazz = FindClassOrLog(env, kResultClass);
     if (result_clazz == nullptr) return nullptr;
 
-    // Ctor sig:
+    // Ctor sig (note: all String args are nullable now — Kotlin data class
+    // declares them as `String?`):
     // (Lcom/shadps4/emulator/data/model/ParamSfo;  // paramSfo
     //  Ljava/lang/String;                          // iconPath
     //  Ljava/lang/String;                          // pic1Path
     //  Ljava/lang/String;                          // destDir
     //  I                                           // entryCount
     //  Z                                           // isDrmFree
-    //  Ljava/lang/String;)                         // error
+    //  Ljava/lang/String;)                         // error (non-null)
     // V
     const char* kCtorSig =
         "(Lcom/shadps4/emulator/data/model/ParamSfo;"
@@ -200,9 +206,11 @@ Java_com_shadps4_emulator_data_native_ShadPs4Native_nativeInstallPkg(
     }
 
     // Helper that builds a `PkgInstallResult` with the given error message
-    // (everything else null/0/false).
-    auto make_error = [&](const char* msg) -> jobject {
-        jstring j_msg = env->NewStringUTF(msg);
+    // (everything else null/0/false). Note: destDir is now nullable on the
+    // Kotlin side, so passing nullptr here is safe.
+    auto make_error = [&](const std::string& msg) -> jobject {
+        LOGE("nativeInstallPkg error: %s", msg.c_str());
+        jstring j_msg = env->NewStringUTF(msg.c_str());
         jobject r = env->NewObject(
             result_clazz, ctor,
             /*paramSfo*/ nullptr,
@@ -217,29 +225,95 @@ Java_com_shadps4_emulator_data_native_ShadPs4Native_nativeInstallPkg(
         return r;
     };
 
-    // 1. Parse the PKG header + entry table.
+    // ── Step 1: pre-flight diagnostics ───────────────────────────────────
+    // Before invoking Pkg::Open, peek at the first 16 bytes so we can give
+    // the user a meaningful error message when they pick a file that isn't
+    // actually a PS4 PKG (e.g. a zip, an exe, an ELF, or a PS3 PKG which
+    // shares the same magic but a different body layout).
+    std::error_code ec;
+    if (!std::filesystem::exists(pkg_path, ec)) {
+        return make_error("PKG file does not exist: " + pkg_path.string());
+    }
+    const auto file_size = std::filesystem::file_size(pkg_path, ec);
+    if (ec || file_size < sizeof(PkgHeader)) {
+        return make_error("PKG file is too small (" +
+                          std::to_string(file_size) +
+                          " bytes) — expected at least 128 bytes for the header.");
+    }
+
+    // Read first 16 bytes for diagnostics.
+    u8 first_bytes[16]{};
+    {
+        std::ifstream peek(pkg_path, std::ios::binary);
+        peek.read(reinterpret_cast<char*>(first_bytes), sizeof(first_bytes));
+    }
+
+    // Log them as hex + ASCII for logcat debugging.
+    char hex_buf[64]{};
+    char ascii_buf[20]{};
+    for (int i = 0; i < 16; i++) {
+        std::snprintf(hex_buf + i * 3, 4, "%02X ", first_bytes[i]);
+        ascii_buf[i] = (first_bytes[i] >= 0x20 && first_bytes[i] < 0x7F)
+                       ? static_cast<char>(first_bytes[i]) : '.';
+    }
+    LOGI("nativeInstallPkg: first 16 bytes: %s | ASCII: %s | file_size=%llu",
+         hex_buf, ascii_buf, static_cast<unsigned long long>(file_size));
+
+    // Detect common non-PKG files by their magic bytes — give the user a
+    // friendly error message instead of a generic "bad magic".
+    auto starts_with = [&](const u8* sig, std::size_t n) -> bool {
+        return std::memcmp(first_bytes, sig, n) == 0;
+    };
+    if (starts_with(reinterpret_cast<const u8*>("PK\x03\x04"), 4)) {
+        return make_error("Selected file is a ZIP archive, not a PKG. Unzip it first or pick the .pkg file directly.");
+    }
+    if (starts_with(reinterpret_cast<const u8*>("Rar!"), 4)) {
+        return make_error("Selected file is a RAR archive, not a PKG. Extract it first.");
+    }
+    if (starts_with(reinterpret_cast<const u8*>("7z\xBC\xAF\x27\x1C"), 6)) {
+        return make_error("Selected file is a 7-Zip archive, not a PKG. Extract it first.");
+    }
+    if (starts_with(reinterpret_cast<const u8*>("\x7FELF"), 4)) {
+        return make_error("Selected file is an ELF executable (likely eboot.bin), not a PKG.");
+    }
+    if (starts_with(reinterpret_cast<const u8*>("MSCF"), 4)) {
+        return make_error("Selected file is a Microsoft Cabinet archive, not a PKG.");
+    }
+
+    // ── Step 2: parse the PKG header + entry table ──────────────────────
     auto pkg_opt = Pkg::Open(pkg_path);
     if (!pkg_opt) {
-        LOGE("nativeInstallPkg: not a valid PKG (or unreadable): %s", pkg_path.string().c_str());
-        return make_error("Not a valid PKG file (bad magic or truncated).");
+        // Build a precise error showing the actual magic value we read.
+        u32 actual_magic = 0;
+        std::memcpy(&actual_magic, first_bytes, sizeof(u32));
+        char err_buf[256];
+        std::snprintf(err_buf, sizeof(err_buf),
+                      "Not a valid PS4 PKG file. Expected magic 0x7F504B47 (\"\\x7FPKG\"), "
+                      "got 0x%08X. The file may be a PS3 PKG (different layout) or "
+                      "simply not a PKG at all.",
+                      actual_magic);
+        return make_error(err_buf);
     }
     const auto& pkg = *pkg_opt;
-    LOGI("nativeInstallPkg: opened PKG with %u entries, body_offset=%llu, drm_free=%d",
+    LOGI("nativeInstallPkg: opened PKG with %u entries, body_offset=%llu, body_size=%llu, drm_free=%d",
          pkg.entry_count,
          static_cast<unsigned long long>(pkg.body_offset),
+         static_cast<unsigned long long>(pkg.body_size),
          pkg.is_drm_free ? 1 : 0);
 
-    // 2. Extract `sce_sys/` plaintext entries into dest_dir.
-    std::error_code ec;
+    // ── Step 3: extract `sce_sys/` plaintext entries into dest_dir ──────
     std::filesystem::create_directories(dest_dir, ec);
     auto extracted = Pkg::ExtractSceSys(pkg_path, pkg, dest_dir);
     if (extracted.empty()) {
-        return make_error("PKG had no extractable sce_sys/ entries.");
+        // Cleanup the partial dest_dir.
+        std::error_code rec;
+        std::filesystem::remove_all(dest_dir, rec);
+        return make_error("PKG had no extractable sce_sys/ entries (file may be a PS3 PKG or a corrupted PS4 PKG).");
     }
     LOGI("nativeInstallPkg: extracted %zu sce_sys files into %s",
          extracted.size(), dest_dir.string().c_str());
 
-    // 3. Parse the extracted param.sfo (if present).
+    // ── Step 4: parse the extracted param.sfo (if present) ──────────────
     const std::filesystem::path sfo_path = dest_dir / "param.sfo";
     jobject j_psf = nullptr;
     if (std::filesystem::exists(sfo_path)) {
@@ -289,10 +363,14 @@ Java_com_shadps4_emulator_data_native_ShadPs4Native_nativeInstallPkg(
                 }
                 env->DeleteLocalRef(psf_clazz);
             }
+        } else {
+            LOGW("nativeInstallPkg: param.sfo exists but failed to parse");
         }
+    } else {
+        LOGW("nativeInstallPkg: no param.sfo in extracted sce_sys/ entries");
     }
 
-    // 4. Build path strings for icon0.png and pic1.png (if extracted).
+    // ── Step 5: build path strings for icon0.png and pic1.png ───────────
     jstring j_icon = nullptr;
     jstring j_pic1 = nullptr;
     jstring j_dest = env->NewStringUTF(dest_dir.string().c_str());

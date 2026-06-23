@@ -25,6 +25,7 @@
         android:theme="@style/Theme.ShadPS4"
         android:hardwareAccelerated="true"
         android:largeHeap="true"
+        android:enableOnBackInvokedCallback="true"
         tools:targetApi="34">
 
         <activity
